@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="tr" class="dark">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>basoken</title>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,typography"></script>
+<style>
+:root { --primary:#A3E635; }
+body{
+margin:0;
+background:transparent;
+font-family:'Roboto',sans-serif;
+display:flex;
+align-items:center;
+justify-content:center;
+height:100vh;
+cursor:none;
+}
+#game{ width:420px; background:#f3f4f6; border-radius:10px; box-shadow:0 6px 18px rgba(0,0,0,0.12); overflow:hidden; display:none;}
+.dark #game{ background:#1f2937; color:#e5e7eb; }
+.header{ display:flex; align-items:center; justify-content:space-between; padding:10px 14px; border-bottom:1px solid #d1d5db;}
+.dark .header{ border-color:#374151; }
+.container{ display:flex; flex-direction:column; align-items:center; gap:18px; padding:24px;}
+#timerWrap{ display:flex; align-items:center; gap:8px; font-weight:bold; color:#22c55e;}
+#timerText{ font-size:20px; }
+.progress{ width:100%; background:#d1d5db; border-radius:10px; height:12px; overflow:hidden;}
+.dark .progress{ background:#374151; }
+#stabilityBar{ width:100%; height:100%; background:var(--primary); transition:width 0.05s linear, background 0.2s;}
+#roundText{ font-size:12px; color:#6b7280; margin-bottom:4px; display:block; text-align:center;}
+.dark #roundText{ color:#9ca3af; }
+#keysGrid{ display:grid; grid-template-columns:repeat(4,1fr); gap:10px; width:80%;}
+.keyBtn{
+background:#d1d5db;
+border-radius:8px;
+height:64px;
+display:flex;
+align-items:center;
+justify-content:center;
+font-weight:700;
+font-size:20px;
+color:#111827;
+user-select:none;
+transition:filter 0.2s, transform 0.2s;
+}
+.keyBtn.highlight{ filter:brightness(0.85); box-shadow:inset 0 4px 10px rgba(0,0,0,0.3); transform:translateY(-4px);}
+.dark .keyBtn{ background:#374151; color:#e5e7eb; }
+#arrowIcon{ display:block; text-align:center; font-size:36px; transition:transform 0.25s ease; color:#9ca3af; height:40px;}
+#message{ min-height:28px; text-align:center; font-weight:600; font-size:14px; color:#e5e7eb;}
+</style>
+</head>
+<body>
+<div id="game" aria-live="polite">
+<div class="header">
+<span>⌨️</span>
+<p>Doğru tuş dizisini gir</p>
+<div style="width:20px;"></div>
+</div>
+<div class="container">
+<div id="timerWrap">
+<span>⏱️</span>
+<span id="timerText">01:00</span>
+</div>
+<div class="w-full text-center">
+<span id="roundText">1/3</span>
+<div class="progress"><div id="stabilityBar"></div></div>
+</div>
+<div id="keysGrid"></div>
+<div id="arrowIcon">▲</div>
+<div id="message"></div>
+</div>
+</div>
+<script>
+const poolKeys = "q w e r t y u ı o p ğ ü a s d f g h j l ş i z x c v b n m ö ç 0 1 2 3 4 5 6 7 8 9".split(/\s+/);
+let visibleKeys = [];
+let totalRounds = 3, seqLen = 5, startTimer = 60;
+let stabilityMax = 100, stability = 100;
+let correctGain = 10, wrongPenalty = 20;
+let currentRound = 0, currentSequence = [], sequenceIndex = 0;
+let timer = startTimer, timerInterval = null, stabilityInterval = null, gameActive = false;
+let parentRes = (typeof GetParentResourceName !== "undefined") ? GetParentResourceName() : "";
+const keysGrid = document.getElementById('keysGrid');
+const timerText = document.getElementById('timerText');
+const stabilityBar = document.getElementById('stabilityBar');
+const roundText = document.getElementById('roundText');
+const arrowIcon = document.getElementById('arrowIcon');
+const message = document.getElementById('message');
+const tickRate = 50;
+let drainPerTick = stabilityMax / (3000 / tickRate);
+function sampleArray(arr, n){
+const copy = arr.slice(); const out = [];
+while(out.length < n && copy.length){
+const i = Math.floor(Math.random() * copy.length);
+out.push(copy.splice(i,1)[0]);
+}
+return out;
+}
+function buildKeysGrid(){
+keysGrid.innerHTML = '';
+visibleKeys.forEach(k=>{
+const div = document.createElement('div');
+div.classList.add('keyBtn');
+div.dataset.key = k;
+div.innerText = k;
+keysGrid.appendChild(div);
+});
+}
+function genSequence(len){
+const seq = [];
+for(let i=0;i<len;i++)
+seq.push(visibleKeys[Math.floor(Math.random()*visibleKeys.length)]);
+return seq;
+}
+function moveArrowTo(letter){
+const btn = Array.from(document.querySelectorAll('.keyBtn')).find(b=>b.dataset.key===letter);
+if(!btn) return;
+const rect = btn.getBoundingClientRect(), parent = keysGrid.getBoundingClientRect();
+const x = rect.left + rect.width/2 - parent.left - parent.width/2;
+arrowIcon.style.transform = `translateX(${x}px)`;
+document.querySelectorAll('.keyBtn').forEach(b=>b.classList.remove('highlight'));
+btn.classList.add('highlight');
+}
+function updateStability(){
+stabilityBar.style.width = `${(stability/stabilityMax)*100}%`;
+if(stability > 60) stabilityBar.style.background = '#A3E635';
+else if(stability > 30) stabilityBar.style.background = '#F59E0B';
+else stabilityBar.style.background = '#EF4444';
+}
+function startGame(cfg){
+cfg = cfg || {};
+totalRounds = cfg.totalRounds || 3;
+seqLen = cfg.seqLen || 5;
+startTimer = cfg.startTimer || 60;
+stabilityMax = cfg.stabilityMax || 100;
+stability = stabilityMax;
+correctGain = cfg.correctGain || 10;
+wrongPenalty = cfg.wrongPenalty || 20;
+visibleKeys = sampleArray(poolKeys, 8);
+buildKeysGrid();
+currentRound = 0;
+timer = startTimer;
+gameActive = true;
+message.innerText = '';
+document.getElementById('game').style.display = 'block';
+nextRound();
+startTimerLoop();
+startStabilityLoop();
+}
+function nextRound(){
+if(currentRound >= totalRounds){ finish(true); return; }
+currentRound++;
+sequenceIndex = 0;
+visibleKeys = sampleArray(poolKeys, 8);
+buildKeysGrid();
+currentSequence = genSequence(seqLen);
+roundText.innerText = `${currentRound}/${totalRounds}`;
+stability = stabilityMax;
+message.innerText = `Tur ${currentRound}`;
+updateStability();
+moveArrowTo(currentSequence[sequenceIndex]);
+}
+function startTimerLoop(){
+clearInterval(timerInterval);
+timerInterval = setInterval(()=>{
+if(!gameActive) return;
+timer--;
+const m = Math.floor(timer / 60);
+const s = String(timer % 60).padStart(2,'0');
+timerText.innerText = `${m}:${s}`;
+if(timer<=0) finish(false);
+},1000);
+}
+function startStabilityLoop(){
+clearInterval(stabilityInterval);
+stabilityInterval = setInterval(()=>{
+if(!gameActive) return;
+stability = Math.max(0, stability - drainPerTick);
+updateStability();
+if(stability <= 0) finish(false);
+}, tickRate);
+}
+function handleKeyPress(key){
+if(!gameActive) return;
+const expected = currentSequence[sequenceIndex];
+if(key === expected){
+const extraTicks = 2000 / tickRate;
+stability = Math.min(stabilityMax, stability + drainPerTick * extraTicks);
+sequenceIndex++;
+if(sequenceIndex >= currentSequence.length){
+message.innerText = `Tur ${currentRound} tamamlandı!`;
+setTimeout(()=>nextRound(), 600);
+} else moveArrowTo(currentSequence[sequenceIndex]);
+} else {
+stability = Math.max(0, stability - wrongPenalty);
+message.innerText = `Yanlış tuş: ${key}`;
+}
+updateStability();
+}
+
+document.addEventListener('keydown', e => {
+let key = e.key.toLowerCase();
+const map = { 'i̇': 'i', 'ı': 'ı', 'ğ': 'ğ', 'ü': 'ü', 'ş': 'ş', 'ç': 'ç', 'ö': 'ö' };
+key = map[key] || key;
+const match = visibleKeys.find(k => k.toLowerCase() === key);
+if (match) handleKeyPress(match);
+});
+function finish(success){
+gameActive = false;
+clearInterval(timerInterval); clearInterval(stabilityInterval);
+if(success){
+message.innerText = 'BAŞARILI!';
+fetch(`https://${parentRes}/success`,{method:'POST',body:'{}'});
+} else {
+message.innerText = 'BAŞARISIZ!';
+fetch(`https://${parentRes}/fail`,{method:'POST',body:'{}'});
+}
+setTimeout(()=>{
+document.getElementById('game').style.display='none';
+fetch(`https://${parentRes}/close`,{method:'POST',body:'{}'});
+},800);
+}
+window.addEventListener('message',e=>{
+if(e.data.action==='open') startGame(e.data.config);
+else if(e.data.action==='close') finish(false);
+});
+</script>
+</body>
+</html>
